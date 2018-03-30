@@ -2,9 +2,9 @@
 module Java.ClassPath
   (module Java.ClassPath.Types,
    module Java.ClassPath.Common,
- --  appendPath, addDirectory, loadClass,
-  -- runClassPath, execClassPath,
-  -- getEntry
+   appendPath, addDirectory, loadClass,
+   runClassPath, execClassPath,
+   getEntry
   ) where
 
 import qualified Control.Monad.State as St
@@ -19,7 +19,6 @@ import Java.ClassPath.Common
 import Java.JAR.Archive
 
 -- | For given list of glob masks, return list of matching files
-{--
 glob :: FilePath -> [FilePath] -> IO [FilePath]
 glob dir patterns = do
   (matches, _) <- globDir (map compile patterns) dir
@@ -44,9 +43,8 @@ runClassPath m = St.evalStateT m []
 -- | Run ClassPath monad and return resulting ClassPath
 execClassPath :: ClassPath () -> IO [Tree CPEntry]
 execClassPath m = St.execStateT m []
---}
+
 -- | Load one class in current ClassPath
-{--
 loadClass :: String -> ClassPath ()
 loadClass path = do
     cp <- St.get
@@ -100,4 +98,3 @@ getEntry cp path = get cp (split "/" path)
       | otherwise = get es [p]
     get x y = fail $ "Unexpected arguments for ClassPath.getEntry.get: " ++ show x ++ ", " ++ show y
 
---}

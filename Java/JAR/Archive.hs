@@ -1,8 +1,7 @@
 -- | This module defines functions to read Java JAR files.
 module Java.JAR.Archive where
 
-{--
-import Codec.Archive.Zip
+import qualified Codec.Archive.LibZip as Zip
 import Data.Binary
 import Data.List
 import qualified Data.ByteString.Lazy as B
@@ -15,13 +14,13 @@ import JVM.Converter
 
 readJAREntry :: (Enum a) => FilePath -> String -> IO (Maybe [a])
 readJAREntry jarfile path = do
-  catchZipError (Just `fmap` (withArchive [] jarfile $ fileContents [] path))
+  Zip.catchZipError (Just `fmap` (Zip.withArchive [] jarfile $ Zip.fileContents [] path))
                     (\_ -> return Nothing)
 
 -- | Read all entires from JAR file
 readAllJAR :: FilePath -> IO [Tree CPEntry]
 readAllJAR jarfile = do
-    files <- withArchive [] jarfile $ fileNames []
+    files <- Zip.withArchive [] jarfile $ Zip.fileNames []
     return $ mapF (NotLoadedJAR jarfile) (buildTree $ filter good files)
   where
     good file = ".class" `isSuffixOf` file
@@ -29,7 +28,7 @@ readAllJAR jarfile = do
 -- | Read one class from JAR file
 readFromJAR :: FilePath -> FilePath -> IO (Class Direct)
 readFromJAR jarfile path = do
-  content <- withArchive [] jarfile $ fileContents [] path
+  content <- Zip.withArchive [] jarfile $ Zip.fileContents [] path
   let bstr = B.pack content
   return $ classFile2Direct (decode bstr)
 
@@ -46,10 +45,10 @@ checkClassTree forest = mapFMF check forest
     check a (LoadedJAR _ cls) =
        return (a </> show (thisClass cls), cls)
 
-zipJAR :: [Tree (FilePath, Class Direct)] -> Codec.Archive.Zip.ZipArchive ()
+zipJAR :: [Tree (FilePath, Class Direct)] -> Zip.Archive ()
 zipJAR forest = do
     mapFM go forest
     return ()
   where
-    go (path, cls) = addFile path =<< sourceBuffer (B.unpack $ encodeClass cls)
---}
+    go (path, cls) = Zip.addFile path =<< Zip.sourceBuffer (B.unpack $ encodeClass cls)
+
