@@ -10,9 +10,8 @@
 module JVM.Builder.Monad
   (GState (..),
    emptyGState,
-   GeneratorMonad (..),
    Generator (..),
-   Generate (..), GenerateIO (..),
+   Generate, GenerateIO,
    addToPool,
    i0, i1, i8,
    newMethod,
@@ -64,42 +63,13 @@ emptyGState = GState {
   locals = 0,
   classPath = []}
 
-class Monad m => GeneratorMonad m where
-  getGState :: m GState
-  putGState :: GState -> m ()
-
-instance MonadState GState m => GeneratorMonad m where
-  getGState = St.get
-  putGState = St.put
-
-modifyGState :: GeneratorMonad m => (GState -> GState) -> m ()
-modifyGState fn = do
-  st <- getGState
-  putGState $ fn st
-
-getsGState :: GeneratorMonad m => (GState -> a) -> m a
-getsGState fn = do
-  st <- getGState
-  return $ fn st
-
-instance Monad (GeneratorMonad) where
-
-
-class (Monad (g e), GeneratorMonad (g e)) => Generator e g where
+class (Monad (g e), MonadState GState (g e)) => Generator e g where
   throwG :: (Exception x, Throws x e) => x -> g e a
 
 -- | Generate monad
 newtype Generate e a = Generate {
   runGenerate :: EMT e (State GState) a }
   deriving (Monad, MonadState GState)
-
-instance Functor (Generate e) where
-  fmap = liftM
-
-instance Applicative (Generate e) where
-  pure  = return
-  (<*>) = ap
-
 
 instance MonadState st (EMT e (StateT st IO)) where
   get = lift St.get
@@ -109,29 +79,10 @@ instance MonadState st (EMT e (State st)) where
   get = lift St.get
   put x = lift (St.put x)
 
-instance Functor ((EMT e (StateT st IO))) where
-  fmap = liftM
-
-instance Applicative ((EMT e (StateT st IO))) where
-  pure  = return
-  (<*>) = ap
-
-
-
-
 -- | IO version of Generate monad
 newtype GenerateIO e a = GenerateIO {
   runGenerateIO :: EMT e (StateT GState IO) a }
-  deriving (Monad, MonadIO, MonadState GState)
-
-instance Functor (GenerateIO e) where
-  fmap = liftM
-
-instance Applicative (GenerateIO e) where
-  pure  = return
-  (<*>) = ap
-
-
+  deriving (Monad, MonadState GState, MonadIO)
 
 instance MonadIO (EMT e (StateT GState IO)) where
   liftIO action = lift $ liftIO action
@@ -157,28 +108,27 @@ execGenerate cp (Generate emt) = do
     execState (runEMT caught) (emptyGState {classPath = cp})
 
 -- | Update ClassPath
-{-- todo Add back in
 withClassPath :: ClassPath () -> GenerateIO e ()
 withClassPath cp = do
   res <- liftIO $ execClassPath cp
-  st <- getGState
-  putGState $ st {classPath = res}
---}
+  st <- St.get
+  St.put $ st {classPath = res}
+
 -- | Add a constant to pool
 addItem :: (Generator e g) => Constant Direct -> g e Word16
 addItem c = do
-  pool <- getsGState currentPool
+  pool <- St.gets currentPool
   case lookupPool c pool of
     Just i -> return i
     Nothing -> do
-      i <- getsGState nextPoolIndex
+      i <- St.gets nextPoolIndex
       let pool' = M.insert i c pool
           i' = if long c
                  then i+2
                  else i+1
-      modifyGState $ \st -> 
-            st {currentPool = pool',
-                nextPoolIndex = i'}
+      st <- St.get
+      St.put $ st {currentPool = pool',
+                   nextPoolIndex = i'}
       return i
 
 -- | Lookup in a pool
@@ -227,7 +177,9 @@ addToPool c = addItem c
 
 putInstruction :: (Generator e g) => Instruction -> g e ()
 putInstruction instr = do
-  modifyGState $ \st -> st {generated = generated st ++ [instr]}
+  st <- St.get
+  let code = generated st
+  St.put $ st {generated = code ++ [instr]}
 
 -- | Generate one (zero-arguments) instruction
 i0 :: (Generator e g) => Instruction -> g e ()
@@ -248,12 +200,14 @@ i8 fn c = do
 -- | Set maximum stack size for current method
 setStackSize :: (Generator e g) => Word16 -> g e ()
 setStackSize n = do
-  modifyGState $ \st -> st {stackSize = n}
+  st <- St.get
+  St.put $ st {stackSize = n}
 
 -- | Set maximum number of local variables for current method
 setMaxLocals :: (Generator e g) => Word16 -> g e ()
 setMaxLocals n = do
-  modifyGState $ \st -> st {locals = n}
+  st <- St.get
+  St.put $ st {locals = n}
 
 -- | Start generating new method
 startMethod :: (Generator e g) => [AccessFlag] -> B.ByteString -> MethodSignature -> g e ()
@@ -262,28 +216,28 @@ startMethod flags name sig = do
   addSig sig
   setStackSize 4096
   setMaxLocals 100
-  st <- getGState
+  st <- St.get
   let method = Method {
     methodAccessFlags = S.fromList flags,
     methodName = name,
     methodSignature = sig,
     methodAttributesCount = 0,
     methodAttributes = AR M.empty }
-  putGState $ st {generated = [],
+  St.put $ st {generated = [],
                currentMethod = Just method }
 
 -- | End of method generation
 endMethod :: (Generator e g, Throws UnexpectedEndMethod e) => g e ()
 endMethod = do
-  m <- getsGState currentMethod
-  code <- getsGState genCode
+  m <- St.gets currentMethod
+  code <- St.gets genCode
   case m of
     Nothing -> throwG UnexpectedEndMethod
     Just method -> do
       let method' = method {methodAttributes = AR $ M.fromList [("Code", encodeMethod code)],
                             methodAttributesCount = 1}
-      modifyGState $ \st -> 
-               st {generated = [],
+      st <- St.get
+      St.put $ st {generated = [],
                    currentMethod = Nothing,
                    doneMethods = doneMethods st ++ [method']}
 
@@ -303,11 +257,10 @@ newMethod flags name args ret gen = do
   return (NameType name sig)
 
 -- | Get a class from current ClassPath
-{-- todo Add back in
 getClass :: (Throws ENotLoaded e, Throws ENotFound e)
          => String -> GenerateIO e (Class Direct)
 getClass name = do
-  cp <- getsGState classPath
+  cp <- St.gets classPath
   res <- liftIO $ getEntry cp name
   case res of
     Just (NotLoaded p) -> throwG (ClassFileNotLoaded p)
@@ -315,10 +268,8 @@ getClass name = do
     Just (NotLoadedJAR p c) -> throwG (JARNotLoaded p c)
     Just (LoadedJAR _ c) -> return c
     Nothing -> throwG (ClassNotFound name)
---}
 
 -- | Get class field signature from current ClassPath
-{-- todo Add back in
 getClassField :: (Throws ENotFound e, Throws ENotLoaded e)
               => String -> B.ByteString -> GenerateIO e (NameType (Field Direct))
 getClassField clsName fldName = do
@@ -326,10 +277,8 @@ getClassField clsName fldName = do
   case lookupField fldName cls of
     Just fld -> return (fieldNameType fld)
     Nothing  -> throwG (FieldNotFound clsName fldName)
---}
 
 -- | Get class method signature from current ClassPath
-{-- todo Add back in
 getClassMethod :: (Throws ENotFound e, Throws ENotLoaded e)
                => String -> B.ByteString -> GenerateIO e (NameType (Method Direct))
 getClassMethod clsName mName = do
@@ -337,7 +286,7 @@ getClassMethod clsName mName = do
   case lookupMethod mName cls of
     Just m -> return (methodNameType m)
     Nothing  -> throwG (MethodNotFound clsName mName)
---}
+
 -- | Access the generated bytecode length
 encodedCodeLength :: GState -> Word32
 encodedCodeLength st = fromIntegral . B.length . encodeInstructions $ generated st
